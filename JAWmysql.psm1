@@ -14,6 +14,8 @@ function Invoke-MySqlCommand {
     [switch]$Xml,
     [switch]$TableOutput,
     [switch]$AsObject,
+    [switch]$GenerateSql,
+    [switch]$GenerateCommand,
     [parameter(Mandatory=$true, ParameterSetName="InvocationObject")]
     [Hashtable]$InvocationObject
     )
@@ -75,30 +77,39 @@ if ($InvocationObject) {
         } #end switch
 
     [string]$InvokeString = $Options + ' -e ' + $($InvocationObject['Command'])
-    "Invoking mysql " + $InvokeString | Write-Verbose
-    $InvokeResult = Invoke-Expression -Command "mysql $InvokeString 2>&1" 
+    
+    if ($InvocationObject.GenerateSql) {
+        $InvocationObject['Command']
+        }
+    elseif ($InvocationObject.GenerateCommand) {
+        $InvokeString
+        }
+    else {
+        "Invoking mysql " + $InvokeString | Write-Verbose
+        $InvokeResult = Invoke-Expression -Command "mysql $InvokeString 2>&1" 
 
-    "Checking LASTEXITCODE" | Write-Debug
-    if ($LASTEXITCODE -ne 0) {
-        'Something awful happened, examine stderr output, LASTEXITCODE was ' + $LASTEXITCODE | Write-Verbose
+        "Checking LASTEXITCODE" | Write-Debug
+        if ($LASTEXITCODE -ne 0) {
+            'Something awful happened, examine stderr output, LASTEXITCODE was ' + $LASTEXITCODE | Write-Verbose
 
-        $RegexError = 'ERROR\s(\d+)\s\((.{5})\).+\:\s(.+)'
-        if ($InvokeResult -match $RegexError) {
-            Write-Error -Message $InvokeResult -ErrorId $Matches[1] 
+            $RegexError = 'ERROR\s(\d+)\s\((.{5})\).+\:\s(.+)'
+            if ($InvokeResult -match $RegexError) {
+                Write-Error -Message $InvokeResult -ErrorId $Matches[1] 
+                } 
+                else {
+                Write-Error -Message $InvokeResult 
+                }
             } 
             else {
-            Write-Error -Message $InvokeResult 
+                if ($InvocationObject['AsObject']) {
+                    "Invocation was requested to output as object, calling parser" | Write-Debug
+                    $InvokeResult | Parse-MySqlXmlOutput
+                    }
+                    else {
+                    $InvokeResult
+                    }
             }
-        } 
-        else {
-            if ($InvocationObject['AsObject']) {
-                "Invocation was requested to output as object, calling parser" | Write-Debug
-                $InvokeResult | Parse-MySqlXmlOutput
-                }
-                else {
-                $InvokeResult
-                }
-        }
+        }#end if elseif else
     }#end invocation object
 
 }#end Invoke-MySqlCommand
@@ -157,7 +168,9 @@ function Parse-MySqlXmlOutput {[cmdletbinding(DefaultParameterSetName="Object")]
 
 function TemplateFunction {
 $TemplateVariable
-[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true
+[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
 )
     $InvokeParam = @{
         ServerUser = $ServerUser
@@ -167,6 +180,9 @@ $TemplateVariable
         Xml = $Xml
         Table = $TableOutput
         AsObject = $AsObject
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+    
         Command = 'SOMESQLCOMMAND ' + $TempalateVariable
         }
 #>
@@ -175,7 +191,9 @@ param (
 [Parameter(Mandatory=$True)]
 [alias('Name')]
 [string]$Database,
-[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml
+[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
 )
     $InvokeParam = @{
         ServerUser = $ServerUser
@@ -183,6 +201,9 @@ param (
         ServerHost = $ServerHostname
         ServerPort = $ServerPort
         Xml = $Xml
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+
         Command = 'CREATE DATABASE ' + $Database
         }
     Invoke-MySqlCommand -InvocationObject $InvokeParam
@@ -193,14 +214,19 @@ function New-MySqlUser {[cmdletbinding()]
         [Parameter(Mandatory=$True)][string]$Username, 
         [Parameter(Mandatory=$True)][string]$Password,
         [string]$Hostname = 'localhost',
-        [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml
-)
+        [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
+    )
     $InvokeParam = @{
         ServerUser = $ServerUser
         ServerPassword = $ServerPassword 
         ServerHost = $ServerHostname
         ServerPort = $ServerPort
         Xml = $Xml
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+
         Command = "CREATE USER '" + $Username + "'@'" + $Hostname + "' IDENTIFIED BY '" + $Password + "'"
         }
 
@@ -210,28 +236,54 @@ Invoke-MySqlCommand -InvocationObject $InvokeParam
 function Set-MySqlPrivilege {
 <#
 .SYNOPSIS
-Set privelege on MySQL database
+Set Privilege on MySQL database
 
 .Example
 Set-MySqlPrivilege -Database TestingDB2 -Username Vasya -Grant -Verbose
 #>
 [cmdletbinding()]
     param (
-        [string]$Privelege = "ALL",
-        [Parameter(Mandatory=$True)][string]$Username, 
-        [Parameter(Mandatory=$True)][string]$Database,
+        [string[]]$Privilege = "ALL",
+            [Parameter(Mandatory=$True)]
+        [string]$Database,
+            [Parameter(Mandatory=$false)]
+        [string]$Table = '*',
+            [Parameter(Mandatory=$True)]
+        [string]$Username,
         [string]$Hostname = 'localhost',
         [switch]$Grant,
-        [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml
-)
+        [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml,
+        [switch]$GenerateSql, [switch]$GenerateCommand
+        )
+
     $InvokeParam = @{
         ServerUser = $ServerUser
         ServerPassword = $ServerPassword 
         ServerHost = $ServerHostname
         ServerPort = $ServerPort
         Xml = $Xml
-        Command = "GRANT " + $Privelege + " on ``"+$Database+"``.* TO '" +$Username+"'@'"+$Hostname+ "'" + $(if ($Grant) {" WITH GRANT OPTION"})
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+        #command will be constructed further
+        Command = ''
         }
+    if ($Table -ne '*') {
+        $Table = "``" + $Table + "``"
+        }
+
+    [int]$PrivCount = @($Privilege).Length
+        if ($PrivCount -gt 1) {
+            [string]$NewPrivString = ''
+            for ($i = 0; $i -lt $PrivCount; $i++) {
+                $NewPrivString += $Privilege[$i]
+                if ($i -ne ($PrivCount - 1)) {
+                    $NewPrivString += ', ' 
+                    }
+                }#end for
+            $Privilege = $NewPrivString
+            }#end if
+    $InvokeParam['Command'] = "GRANT " + $Privilege + " on ``"+$Database+"``." + $Table + " TO '" +$Username+"'@'"+$Hostname+ "'" + $(if ($Grant) {" WITH GRANT OPTION"})
+        
 Invoke-MySqlCommand -InvocationObject $InvokeParam
 }
 
@@ -248,6 +300,9 @@ param(
         Xml = $Xml
         Table = $TableOutput
         AsObject = $AsObject
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+
         Command = "SELECT User, Host, Password FROM mysql.user"
         }
         Invoke-MySqlCommand -InvocationObject $InvokeParam 
@@ -255,7 +310,10 @@ param(
 
 function Get-MySqlDatabase {[cmdletbinding()]
 param(
-[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true
+[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
+    
 )
     $InvokeParam = @{
         ServerUser = $ServerUser
@@ -265,6 +323,9 @@ param(
         Xml = $Xml
         Table = $TableOutput
         AsObject = $AsObject
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+
         Command =  "SHOW DATABASES"
         }
         Invoke-MySqlCommand -InvocationObject $InvokeParam
@@ -277,7 +338,9 @@ param(
 [parameter(Mandatory=$true, ValueFromPipeline=$True,Position=0)]
 [alias('Name')]
 [string]$TableName,
-[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true
+[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
 )
     $InvokeParam = @{
         ServerUser = $ServerUser
@@ -287,6 +350,9 @@ param(
         Xml = $Xml
         Table = $TableOutput
         AsObject = $AsObject
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+
         Command = [string]"show full tables from " + $Name
         }
         Invoke-MySqlCommand  -InvocationObject $InvokeParam  
@@ -299,8 +365,10 @@ param(
 [string]$Table,
 [parameter(Mandatory=$false, ParameterSetName="Object", ValueFromPipeline=$false, Position = 1)]
 [string]$Database,
-[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true
-)
+[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
+    )
 if ($Database) {
     $Command = [string]"SHOW FULL COLUMNS FROM " + $Table + " FROM " + $Database
     }
@@ -316,6 +384,9 @@ if ($Database) {
         Xml = $Xml
         TableOutput = $TableOutput
         AsObject = $AsObject
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+
         Command = $Command
         }
         Invoke-MySqlCommand  -InvocationObject $InvokeParam  
@@ -324,7 +395,9 @@ if ($Database) {
 function Remove-MySqlDatabase {[cmdletbinding()]
 param (
 [Parameter(Mandatory=$True)][string]$Database,
-[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml
+[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
 )
     $InvokeParam = @{
         ServerUser = $ServerUser
@@ -340,14 +413,19 @@ Invoke-MySqlCommand -InvocationObject $InvokeParam
 function Remove-MySqlUser {[cmdletbinding()]
     param (
         [Parameter(Mandatory=$True)][string]$Username, 
-        [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml
-)
+        [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
+    )
     $InvokeParam = @{
         ServerUser = $ServerUser
         ServerPassword = $ServerPassword 
         ServerHost = $ServerHostname
         ServerPort = $ServerPort
         Xml = $Xml
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+
         Command = "DROP USER " + $Username + ""
         }
 Invoke-MySqlCommand -InvocationObject $InvokeParam
@@ -355,12 +433,20 @@ Invoke-MySqlCommand -InvocationObject $InvokeParam
 
 function Get-MySqlGrants {
 [CmdletBinding(DefaultParameterSetName="Command")]
-param ()
-  $MySqlUsers = @(Get-MySqlUser) 
+param (
+    [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort
+    )
+    $InvokeParam = @{
+        ServerUser = $ServerUser
+        ServerPassword = $ServerPassword 
+        ServerHost = $ServerHostname
+        ServerPort = $ServerPort
+        }
+  $MySqlUsers = @(Get-MySqlUser @InvokeParam) 
   $nameRegex = 'Grants\sfor\s(?<user>\S+)@(?<host>\S+)'
   
   foreach ($User in $MySqlUsers) {   
-    [xml]$Grant = Invoke-MySqlCommand -xml "show grants for '$($User.user)'@'$($User.host)'"
+    [xml]$Grant = Invoke-MySqlCommand -xml "show grants for '$($User.user)'@'$($User.host)'" @InvokeParam
  
     foreach ($field in @($Grant.resultset.row.field)) {
         $obj = New-Object System.Object
@@ -376,7 +462,9 @@ param ()
 
 function Clear-MySqlPrivilegesCache {[cmdletbinding()]
 param(
-[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml
+[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml,
+[switch]$GenerateSql,
+    [switch]$GenerateCommand
 )
     $InvokeParam = @{
         ServerUser = $ServerUser
@@ -389,6 +477,60 @@ param(
 Invoke-MySqlCommand -InvocationObject $InvokeParam
 }
 
-Set-Alias Flush-MySqlPrivileges Clear-MySqlPrivilegesCache
 
- 
+function Remove-MySqlPrivilege {
+<#
+.SYNOPSIS
+Remove Privilege on MySQL database
+
+.Example
+Renive-MySqlPrivilege -Database TestingDB2 -Username Vasya 
+#>
+[cmdletbinding()]
+    param (
+        [string[]]$Privilege = "ALL PRIVILEGES",
+            [Parameter(Mandatory=$True)]
+        [string]$Database,
+            [Parameter(Mandatory=$false)]
+        [string]$Table = '*',
+            [Parameter(Mandatory=$True)]
+        [string]$Username,
+        [string]$Hostname = 'localhost',
+        [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml,
+        [switch]$GenerateSql, [switch]$GenerateCommand
+        )
+
+    $InvokeParam = @{
+        ServerUser = $ServerUser
+        ServerPassword = $ServerPassword 
+        ServerHost = $ServerHostname
+        ServerPort = $ServerPort
+        Xml = $Xml
+        GenerateSql = $GenerateSql
+        GenerateCommand = $GenerateCommand
+        #command will be constructed further
+        Command = ''
+        }
+    if ($Table -ne '*') {
+        $Table = "``" + $Table + "``"
+        }
+
+    [int]$PrivCount = @($Privilege).Length
+        if ($PrivCount -gt 1) {
+            [string]$NewPrivString = ''
+            for ($i = 0; $i -lt $PrivCount; $i++) {
+                $NewPrivString += $Privilege[$i]
+                if ($i -ne ($PrivCount - 1)) {
+                    $NewPrivString += ', ' 
+                    }
+                }#end for
+            $Privilege = $NewPrivString
+            }#end if
+    $InvokeParam['Command'] = "REVOKE " + $Privilege + " ON ``"+$Database+"``." + $Table + " FROM '" +$Username+"'@'"+$Hostname+ "'" 
+        
+Invoke-MySqlCommand -InvocationObject $InvokeParam
+}
+
+
+Set-Alias Flush-MySqlPrivileges Clear-MySqlPrivilegesCache
+Set-Alias Revoke-MySqlPrivilege Remove-MySqlPrivilege
