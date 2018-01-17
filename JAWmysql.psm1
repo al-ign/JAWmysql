@@ -35,7 +35,7 @@ if ($Command) {
  
 
 if ($InvocationObject) {
-    [string]$Options = ''
+    [array]$Options = @()
     "Processing invocation object parisng" | Write-Debug
 
     if ($InvocationObject['AsObject']) {
@@ -45,48 +45,48 @@ if ($InvocationObject) {
 
     switch ($InvocationObject.Keys | ? {$InvocationObject[$_]} ) {
             'Command' {
-                "Performing unnecessary command normalization" | Write-Debug
+                #"Performing unnecessary command normalization" | Write-Debug
                 $InvocationObject[$_] = $InvocationObject[$_] -replace '(^[ ]*"[ ]*)(.+)([ ]*"+[ ]*$)','$2' -replace '[ ]*;*[ ]*$'
                 if ($InvocationObject[$_] -notmatch ';[ ]*$') {
-                    "Adding trailing semicolon" | Write-Debug 
+                    #"Adding trailing semicolon" | Write-Debug 
                     $InvocationObject[$_] = $InvocationObject[$_] -replace '(.+)([ ]*$)','$1;'
                     }
                 if ($InvocationObject[$_] -notmatch '^[ ]*".+"[ ]*$') {
-                    "Escaping with quotation marks" | Write-Debug
+                    #"Escaping with quotation marks" | Write-Debug
                     $InvocationObject[$_] = '"' + $InvocationObject[$_] + '"'
                     }
                 }
             'ServerUser' {
-                $Options += ' --user=' + $InvocationObject[$_]                
+                $Options += '--user=' + $InvocationObject[$_]                
                 }
             'ServerPassword' {
-                $Options += ' --password=' + $InvocationObject[$_]
+                $Options += '--password=' + $InvocationObject[$_]
                 }
             'ServerHost' {
-                $Options += ' --host=' + $InvocationObject[$_]
+                $Options += '--host=' + $InvocationObject[$_]
                 }
             'ServerPort' {
-                $Options += ' --port=' + $InvocationObject[$_]
+                $Options += '--port=' + $InvocationObject[$_]
                 }
             'Xml' {
-                $Options += ' --xml'
+                $Options += '--xml'
                 }
             'Table' {#xml output overrides table internally in mysql, so don't bother with parameter validation
-                $Options += ' --table'
+                $Options += '--table'
                 }
         } #end switch
 
-    [string]$InvokeString = $Options + ' -e ' + $($InvocationObject['Command'])
+    #[string]$InvokeString = $Options + ' -e ' + $($InvocationObject['Command'])
     
     if ($InvocationObject.GenerateSql) {
         $InvocationObject['Command']
         }
     elseif ($InvocationObject.GenerateCommand) {
-        $InvokeString
+        [string]$Options + ' -e ' + $($InvocationObject['Command'])
         }
     else {
-        "Invoking mysql " + $InvokeString | Write-Verbose
-        $InvokeResult = Invoke-Expression -Command "mysql $InvokeString 2>&1" 
+        "Invoking mysql " + [string]$Options + ' -e ' + $($InvocationObject['Command']) | Write-Verbose
+        $InvokeResult = Invoke-Command -ScriptBlock {mysql $Options `-e $($InvocationObject['Command']) 2>&1} 
 
         "Checking LASTEXITCODE" | Write-Debug
         if ($LASTEXITCODE -ne 0) {
@@ -116,7 +116,19 @@ if ($InvocationObject) {
 
 
 
-function Parse-MySqlXmlOutput {[cmdletbinding(DefaultParameterSetName="Object")]
+function Parse-MySqlXmlOutput {
+<#
+.Synopsis
+   Convert MySQL XML output to Objects
+
+.DESCRIPTION
+   Make MySQL output usable in PowerShell as objects
+
+.EXAMPLE
+   Invoke-MySqlCommand -Command 'SELECT * FROM mysql' -XML | Parse-MySqlXmlOutput
+#>
+[cmdletbinding(DefaultParameterSetName="Object")]
+
     param (
     [parameter(Mandatory=$true, ParameterSetName="Object", ValueFromPipeline=$True, ValueFromRemainingArguments=$true)] 
     $InputObjectData
@@ -242,6 +254,7 @@ Set Privilege on MySQL database
 Set-MySqlPrivilege -Database TestingDB2 -Username Vasya -Grant -Verbose
 #>
 [cmdletbinding()]
+[Alias('New-MySqlPrivilege','Set-MySqlGrant','New-MySqlGrant')]
     param (
         [string[]]$Privilege = "ALL",
             [Parameter(Mandatory=$True)]
@@ -290,7 +303,8 @@ Invoke-MySqlCommand -InvocationObject $InvokeParam
 function Get-MySqlUser {
 [cmdletbinding()]
 param(
-[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true
+[string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort, [switch]$Xml, [switch]$TableOutput, [switch]$AsObject = $true,[switch]$GenerateSql,
+    [switch]$GenerateCommand
 )
     $InvokeParam = @{
         ServerUser = $ServerUser
@@ -431,8 +445,9 @@ function Remove-MySqlUser {[cmdletbinding()]
 Invoke-MySqlCommand -InvocationObject $InvokeParam
 }
 
-function Get-MySqlGrants {
+function Get-MySqlPrivilege {
 [CmdletBinding(DefaultParameterSetName="Command")]
+[Alias('Get-MySqlGrant')]
 param (
     [string]$ServerUser, [string]$ServerPassword, [string]$ServerHost, [string]$ServerPort
     )
@@ -487,6 +502,7 @@ Remove Privilege on MySQL database
 Renive-MySqlPrivilege -Database TestingDB2 -Username Vasya 
 #>
 [cmdletbinding()]
+[Alias('Remove-MySqlGrant','Revoke-MySqlGrant')]
     param (
         [string[]]$Privilege = "ALL PRIVILEGES",
             [Parameter(Mandatory=$True)]
@@ -534,3 +550,8 @@ Invoke-MySqlCommand -InvocationObject $InvokeParam
 
 Set-Alias Flush-MySqlPrivileges Clear-MySqlPrivilegesCache
 Set-Alias Revoke-MySqlPrivilege Remove-MySqlPrivilege
+Set-Alias Remove-MySqlGrant Remove-MySqlPrivilege
+Set-Alias Get-MySqlGrants Get-MySqlPrivilege
+Set-Alias New-MySqlPrivilege Set-MySqlPrivilege
+Set-Alias Set-MySqlGrant Set-MySqlPrivilege
+Set-Alias New-MySqlGrant Set-MySqlPrivilege
